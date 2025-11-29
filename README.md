@@ -1,7 +1,4 @@
-Phải chạy conda tạo env mới:
-conda create -n tf python=3.10
-conda activate tf (and conda deactivate after using)
-pip install tensorflow==2.13 numpy==1.26
+Bên dưới có folder structure, vui lòng tạo các thư mục ngoài src theo đúng cấu trúc và thêm các files data vào data/raw/MITDB và data/raw/NSTDB tương ứng trước khi chạy "python -m src/main.py" từ thư mục cha của src
 
 # DW-CNN ECG Denoising
 
