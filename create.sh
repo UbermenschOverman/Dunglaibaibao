@@ -6,8 +6,8 @@
 echo "Creating project directories..."
 
 # Raw data folders (user will populate manually)
-mkdir -p data/raw/mitdb
-mkdir -p data/raw/nstdb
+mkdir -p data/raw/MITDB
+mkdir -p data/raw/NSTDB
 
 # Processed data folders
 mkdir -p data/processed/noisy_0dB
