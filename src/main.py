@@ -6,6 +6,48 @@ import tensorflow as tf
 import pandas as pd
 from datetime import datetime
 
+# ==============================
+# GPU Configuration
+# ==============================
+def configure_gpu():
+    """
+    Configure TensorFlow to use GPU with memory growth to avoid allocating all GPU memory.
+    """
+    # Check for available GPUs
+    gpus = tf.config.list_physical_devices('GPU')
+    
+    if len(gpus) == 0:
+        print("[WARNING] No GPU devices found. Training will use CPU.")
+        print("[INFO] To use GPU, ensure:")
+        print("  1. CUDA and cuDNN are installed")
+        print("  2. TensorFlow GPU version is installed: pip install tensorflow[and-cuda]")
+        print("  3. GPU drivers are properly installed")
+        return False
+    
+    print(f"[INFO] Found {len(gpus)} GPU(s):")
+    for i, gpu in enumerate(gpus):
+        print(f"  GPU {i}: {gpu.name}")
+    
+    # Configure GPU memory growth to prevent TensorFlow from allocating all GPU memory
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print("[INFO] GPU memory growth enabled.")
+    except RuntimeError as e:
+        # Memory growth must be set before GPUs have been initialized
+        print(f"[WARNING] Could not set GPU memory growth: {e}")
+    
+    # Optional: Set mixed precision for better performance (requires TensorFlow 2.1+)
+    # Uncomment the following lines if you want to use mixed precision training
+    # policy = tf.keras.mixed_precision.Policy('mixed_float16')
+    # tf.keras.mixed_precision.set_global_policy(policy)
+    # print("[INFO] Mixed precision training enabled.")
+    
+    return True
+
+# Configure GPU at module import
+GPU_AVAILABLE = configure_gpu()
+
 # Import local modules
 from .config import *
 from .preprocessing.data_loader import ECGDataLoader
@@ -235,6 +277,12 @@ def run_experiments(model_dict, run_type):
 if __name__ == "__main__":
 
     print("\n--- SETUP COMPLETE ---")
+    
+    # Display GPU status
+    if GPU_AVAILABLE:
+        print(f"[INFO] Training will use GPU: {tf.config.list_physical_devices('GPU')[0].name}")
+    else:
+        print("[INFO] Training will use CPU (GPU not available)")
 
     # -----------------------------------------------------------------
     # 1. KÍCH HOẠT TIỀN XỬ LÝ (CHỈ CẦN CHẠY MỘT LẦN)
