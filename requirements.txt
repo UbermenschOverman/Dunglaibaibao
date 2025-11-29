@@ -1,0 +1,12 @@
+# requirements.txt
+
+numpy
+pandas
+
+wfdb
+pywt P
+PyWavelets
+tensorflow>=2.0
+
+scikit-learn 
+matplotlib
