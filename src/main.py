@@ -7,11 +7,11 @@ import pandas as pd
 from datetime import datetime
 
 # Import local modules
-from src.config import *
-from src.preprocessing.data_loader import ECGDataLoader
-from src.models import DW_CNN, ModelNet1, DNN_DAN, FCN
-from src.utils.metrics import calculate_rmse, calculate_snr
-from src.utils.plotting import plot_ecg_comparison
+from .config import *
+from .preprocessing.data_loader import ECGDataLoader
+from .models import DW_CNN, ModelNet1, DNN_DAN, FCN
+from .utils.metrics import calculate_rmse, calculate_snr
+from .utils.plotting import plot_ecg_comparison
 
 
 # ==============================
@@ -31,12 +31,14 @@ MODEL_MAPPING = {
 def load_data_for_snr(snr_db):
     """
     Load preprocessed data corresponding to a specific SNR level.
-    Ensures the returned shape is (batch, length, channels).
+    The data is loaded in (batch, channels, length) format and transposed 
+    to (batch, length, channels) to meet Keras's standard Conv1D input (Length, Channel).
     """
 
     snr_path = os.path.join(PROCESSED_DATA_PATH, f"noisy_{snr_db}dB")
 
     if not os.path.exists(snr_path):
+        # Trả về None nếu thư mục không tồn tại
         print(f"[ERROR] Path does not exist: {snr_path}")
         return None
 
@@ -48,17 +50,23 @@ def load_data_for_snr(snr_db):
         X_test = np.load(os.path.join(snr_path, "X_test.npy"))
         Y_test = np.load(os.path.join(snr_path, "Y_test.npy"))
 
-        # Expected raw shape: (batch, channels, length)
-        # Convert to Keras Conv1D shape: (batch, length, channels)
-        X_train = np.transpose(X_train, (0, 2, 1))
-        X_val = np.transpose(X_val, (0, 2, 1))
-        X_test = np.transpose(X_test, (0, 2, 1))
+        # Dữ liệu được lưu ở (batch, channels, length)
+        # CHUYỂN ĐỔI sang định dạng chuẩn của Keras: (batch, length, channels)
+        # Các mô hình DW_CNN/ModelNet1/... được thiết kế với Conv1D(data_format='channels_first')
+        # Tuy nhiên, TensorFlow/Keras vẫn thường cần shape (Length, Channels)
+        
+        X_train_t = np.transpose(X_train, (0, 2, 1)) # (B, L, C)
+        X_val_t = np.transpose(X_val, (0, 2, 1))
+        X_test_t = np.transpose(X_test, (0, 2, 1))
 
-        Y_train = np.transpose(Y_train, (0, 2, 1))
-        Y_val = np.transpose(Y_val, (0, 2, 1))
-        Y_test = np.transpose(Y_test, (0, 2, 1))
+        Y_train_t = np.transpose(Y_train, (0, 2, 1))
+        Y_val_t = np.transpose(Y_val, (0, 2, 1))
+        Y_test_t = np.transpose(Y_test, (0, 2, 1))
+        
+        # TRẢ VỀ: (B, L, C) cho fit/predict, và (B, C, L) cho metrics
+        # (X, Y) là (B, L, C) và (X_raw, Y_raw) là (B, C, L)
+        return X_train_t, Y_train_t, X_val_t, Y_val_t, X_test_t, Y_test_t, X_train, Y_train, X_val, Y_val, X_test, Y_test
 
-        return X_train, Y_train, X_val, Y_val, X_test, Y_test
 
     except FileNotFoundError:
         print(f"[ERROR] Missing .npy files for SNR={snr_db} dB")
@@ -69,7 +77,8 @@ def load_data_for_snr(snr_db):
 # Training & Evaluation
 # ==============================
 def train_and_evaluate(model_name, snr_db,
-                       X_train, Y_train, X_val, Y_val, X_test, Y_test,
+                       X_train_t, Y_train_t, X_val_t, Y_val_t, X_test_t, Y_test_t, # (B, L, C) for Keras
+                       X_test_raw, Y_test_raw, # (B, C, L) for Metrics/Raw data
                        run_type):
     """
     Train model, save best checkpoint, evaluate on test set.
@@ -80,7 +89,11 @@ def train_and_evaluate(model_name, snr_db,
     model_builder = MODEL_MAPPING.get(model_name)
     if model_builder is None:
         raise ValueError(f"Model '{model_name}' not found in MODEL_MAPPING.")
-
+    
+    # Khởi tạo mô hình
+    # CHÚ Ý QUAN TRỌNG: Các hàm tạo mô hình (DW_CNN, v.v.) phải được sửa 
+    # để sử dụng Input(shape=(4096, 1)) thay vì Input(shape=(1, 4096))
+    # Hoặc ta phải truyền INPUT_SHAPE=(4096, 1) vào đây.
     model = model_builder()
     model.compile(optimizer=OPTIMIZER, loss=LOSS_FUNCTION)
 
@@ -104,8 +117,8 @@ def train_and_evaluate(model_name, snr_db,
     # Training
     # -----------------------
     history = model.fit(
-        X_train, Y_train,
-        validation_data=(X_val, Y_val),
+        X_train_t, Y_train_t,
+        validation_data=(X_val_t, Y_val_t),
         epochs=EPOCHS,
         batch_size=BATCH_SIZE,
         callbacks=[ckpt_callback],
@@ -122,14 +135,20 @@ def train_and_evaluate(model_name, snr_db,
     # -----------------------
     # Evaluation
     # -----------------------
-    Y_pred = model.predict(X_test, batch_size=BATCH_SIZE)
+    Y_pred_t = model.predict(X_test_t, batch_size=BATCH_SIZE)
+
+    # Chuyển Y_pred về định dạng (batch, channels, length) (Raw format) để tính metrics
+    Y_pred_raw = np.transpose(Y_pred_t, (0, 2, 1))
 
     rmse_list = []
     snr_list = []
 
-    for i in range(len(Y_pred)):
-        rmse_list.append(calculate_rmse(Y_test[i], Y_pred[i]))
-        snr_list.append(calculate_snr(Y_test[i], Y_pred[i]))
+    for i in range(len(Y_pred_raw)):
+        # Convert từ (channels, length) to 1D cho metrics calculation
+        y_test_flat = Y_test_raw[i].flatten()
+        y_pred_flat = Y_pred_raw[i].flatten()
+        rmse_list.append(calculate_rmse(y_test_flat, y_pred_flat))
+        snr_list.append(calculate_snr(y_test_flat, y_pred_flat))
 
     avg_rmse = np.mean(rmse_list)
     avg_snr = np.mean(snr_list)
@@ -138,7 +157,7 @@ def train_and_evaluate(model_name, snr_db,
     print(f"Avg RMSE: {avg_rmse:.4f}")
     print(f"Avg SNR : {avg_snr:.2f} dB")
 
-    return avg_rmse, avg_snr, history, Y_pred
+    return avg_rmse, avg_snr, history, Y_pred_raw
 
 
 # ==============================
@@ -160,15 +179,18 @@ def run_experiments(model_dict, run_type):
         data = load_data_for_snr(snr_db)
         if data is None:
             continue
-
-        X_train, Y_train, X_val, Y_val, X_test, Y_test = data
+        
+        # Bóc tách dữ liệu: 6 tensor (B, L, C) cho training, 4 tensor (B, C, L) cho metrics
+        X_train_t, Y_train_t, X_val_t, Y_val_t, X_test_t, Y_test_t, \
+        X_train_raw, Y_train_raw, X_val_raw, Y_val_raw, X_test_raw, Y_test_raw = data
 
         for model_label, model_name in model_dict.items():
 
-            avg_rmse, avg_snr, history, Y_pred = train_and_evaluate(
+            avg_rmse, avg_snr, history, Y_pred_raw = train_and_evaluate(
                 model_name,
                 snr_db,
-                X_train, Y_train, X_val, Y_val, X_test, Y_test,
+                X_train_t, Y_train_t, X_val_t, Y_val_t, X_test_t, Y_test_t,
+                X_test_raw, Y_test_raw, # Dữ liệu thô cho Metrics/Plotting
                 run_type
             )
 
@@ -188,10 +210,11 @@ def run_experiments(model_dict, run_type):
                 out_dir = os.path.join(RESULTS_PATH, run_type, f"SNR_{snr_db}dB")
                 os.makedirs(out_dir, exist_ok=True)
 
+                # Dữ liệu X_test_raw, Y_test_raw và Y_pred_raw đều là (B, C, L)
                 plot_ecg_comparison(
-                    x_noisy=X_test[0],
-                    x_clean=Y_test[0],
-                    x_denoised_list=[("DW-CNN", Y_pred[0])],
+                    x_noisy=X_test_raw[0],
+                    x_clean=Y_test_raw[0],
+                    x_denoised_list=[("DW-CNN", Y_pred_raw[0])],
                     noise_type="Combined",
                     snr_db=snr_db,
                     output_path=out_dir
@@ -212,8 +235,21 @@ def run_experiments(model_dict, run_type):
 if __name__ == "__main__":
 
     print("\n--- SETUP COMPLETE ---")
-    print("Uncomment run_experiments() to begin.")
 
-    # Example:
-    # run_experiments(ABLATION_MODELS, run_type="ablation")
-    # run_experiments(COMPARATIVE_MODELS, run_type="comparative")
+    # -----------------------------------------------------------------
+    # 1. KÍCH HOẠT TIỀN XỬ LÝ (CHỈ CẦN CHẠY MỘT LẦN)
+    # -----------------------------------------------------------------
+    print("\n--- BƯỚC 1: TIỀN XỬ LÝ DỮ LIỆU (Đang chạy...) ---")
+    loader = ECGDataLoader(data_root_path=DATA_ROOT)
+    loader.run_preprocessing_and_save() 
+    print("--- TIỀN XỬ LÝ HOÀN THÀNH. Dữ liệu .npy đã được tạo. ---")
+
+    # -----------------------------------------------------------------
+    # 2. KÍCH HOẠT THÍ NGHIỆM
+    # -----------------------------------------------------------------
+    
+    # Chạy Thí nghiệm Loại trừ (Ablation Experiments)
+    run_experiments(ABLATION_MODELS, run_type="ablation")
+    
+    # Chạy Thí nghiệm So sánh (Comparative Experiments)
+    run_experiments(COMPARATIVE_MODELS, run_type="comparative")

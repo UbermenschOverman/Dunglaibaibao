@@ -52,7 +52,7 @@ def calculate_snr(x_clean, x_denoised):
     power_noise = np.sum(noise_error ** 2)
     
     # Trường hợp không có nhiễu còn lại (lý tưởng) hoặc tín hiệu quá nhỏ
-    if power_noise == 0:
+    if power_noise < 1e-10:  # Use small threshold instead of exact zero
         return np.inf  # Vô cùng
     
     # Tính SNR theo công thức 10 * log10 (...) 
@@ -67,6 +67,6 @@ def calculate_initial_snr(x_clean, x_noisy):
     power_signal = np.sum(x_clean ** 2)
     power_noise = np.sum((x_noisy - x_clean) ** 2)
     
-    if power_noise == 0:
+    if power_noise < 1e-10:  # Use small threshold instead of exact zero
         return np.inf
     return 10 * np.log10(power_signal / power_noise)

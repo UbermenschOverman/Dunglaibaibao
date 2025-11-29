@@ -12,7 +12,7 @@ class DWT1D_Pooling(Layer):
     Thay thế cho lớp Max Pooling để tránh mất thông tin hiệu quả[cite: 232].
 
     Thực hiện Convolution với stride=2 và ghép nối (concatenate) cA và cD.
-    Đầu vào: (Batch, Channels, Length) -> Đầu ra: (Batch, 2*Channels, Length/2)
+    Đầu vào: (Batch, Length, Channels) -> Đầu ra: (Batch, Length/2, 2*Channels)
     """
     def __init__(self, **kwargs):
         super(DWT1D_Pooling, self).__init__(**kwargs)
@@ -28,9 +28,10 @@ class DWT1D_Pooling(Layer):
         self.f_H_init = Constant(f_H_np)
 
     def build(self, input_shape):
-        C_in = input_shape[1] # Số kênh đầu vào
+        # Input shape is now (Batch, Length, Channels) - channels_last format
+        C_in = input_shape[2] # Số kênh đầu vào (channels_last: last dimension)
 
-        # Định hình lại bộ lọc để sử dụng trong Conv1D: 
+        # Định hình lại bộ lọc để sử dụng trong tf.nn.conv1d: 
         # (Kernel_size, Channels_in, Channels_out)
         # Trong DWT, mỗi kênh đầu vào tạo ra 1 kênh cA và 1 kênh cD.
         # Channels_out = Channels_in
@@ -61,20 +62,12 @@ class DWT1D_Pooling(Layer):
         super(DWT1D_Pooling, self).build(input_shape)
 
     def call(self, inputs):
-        # Tích chập 1D với stride=2
-        # Cấu trúc dữ liệu: (Batch, Channels, Length) -> phải dùng tf.nn.conv1d
-        # Hoặc đổi thành (Batch, Length, Channels) trước khi dùng Keras Conv1D
-
-        # Chuyển đổi định dạng từ (Batch, Channels, Length) sang (Batch, Length, Channels)
-        inputs_transposed = tf.transpose(inputs, perm=[0, 2, 1]) 
+        # Input is already in (Batch, Length, Channels) format - channels_last
+        # No need to transpose
         
-        # Lấy shape đã transpose
-        L = tf.shape(inputs_transposed)[1]
-        C_in = tf.shape(inputs_transposed)[2]
-
         # Convolution cho cA (Low-pass)
         cA_out = tf.nn.conv1d(
-            inputs_transposed,
+            inputs,
             self.f_L_kernel,
             stride=2, # Down-sampling / Pooling effect 
             padding='VALID' # Không padding để down-sample chính xác
@@ -82,7 +75,7 @@ class DWT1D_Pooling(Layer):
         
         # Convolution cho cD (High-pass)
         cD_out = tf.nn.conv1d(
-            inputs_transposed,
+            inputs,
             self.f_H_kernel,
             stride=2,
             padding='VALID'
@@ -91,15 +84,16 @@ class DWT1D_Pooling(Layer):
         # Ghép nối (Concatenation): (Batch, L/2, C_in) + (Batch, L/2, C_in) -> (Batch, L/2, 2*C_in)
         output = tf.concat([cA_out, cD_out], axis=-1) 
         
-        # Trả về định dạng (Batch, 2*Channels, Length/2)
-        return tf.transpose(output, perm=[0, 2, 1])
+        # Return in channels_last format: (Batch, Length/2, 2*Channels)
+        return output
 
     def compute_output_shape(self, input_shape):
-        C_in = input_shape[1]
-        L_in = input_shape[2]
+        # Input shape: (Batch, Length, Channels)
+        L_in = input_shape[1]
+        C_in = input_shape[2]
         L_out = L_in // 2 # Kích thước giảm một nửa
         C_out = C_in * 2  # Số kênh tăng gấp đôi
-        return (input_shape[0], C_out, L_out)
+        return (input_shape[0], L_out, C_out)
 
 
 class IDWT1D_UpSampling(Layer):
@@ -107,7 +101,7 @@ class IDWT1D_UpSampling(Layer):
     Lớp Up-sampling dựa trên Inverse Discrete Wavelet Transform (IDWT) 1D.
     Tái tạo tín hiệu và đảm bảo độ chính xác của dữ liệu được tái tạo[cite: 464].
 
-    Đầu vào: (Batch, 2*Channels, Length/2) -> Đầu ra: (Batch, Channels, Length)
+    Đầu vào: (Batch, Length/2, 2*Channels) -> Đầu ra: (Batch, Length, Channels)
     """
     def __init__(self, **kwargs):
         super(IDWT1D_UpSampling, self).__init__(**kwargs)
@@ -117,7 +111,8 @@ class IDWT1D_UpSampling(Layer):
         self.g_H_init = get_haar_reconstruction_filters()[1]
 
     def build(self, input_shape):
-        C_in = input_shape[1] # Số kênh đầu vào (đã được nhân đôi)
+        # Input shape is now (Batch, Length, Channels) - channels_last format
+        C_in = input_shape[2] # Số kênh đầu vào (đã được nhân đôi) - channels_last: last dimension
         C_out = C_in // 2 # Số kênh đầu ra
 
         # Bộ lọc tái tạo IDWT (Tích chập chuyển vị/Upsampling)
@@ -161,20 +156,21 @@ class IDWT1D_UpSampling(Layer):
         super(IDWT1D_UpSampling, self).build(input_shape)
 
     def call(self, inputs):
-        # Chuyển đổi định dạng: (Batch, Channels, Length) -> (Batch, Length, Channels)
-        inputs_transposed = tf.transpose(inputs, perm=[0, 2, 1])
+        # Input is already in (Batch, Length, Channels) format - channels_last
+        # No need to transpose
 
         # Thực hiện tích chập chuyển vị (Conv1DTranspose)
         # Conv1DTranspose có stride=2 sẽ up-sample kích thước chiều dài/thời gian lên gấp đôi
         
-        output = self.conv1d_transpose(inputs_transposed)
+        output = self.conv1d_transpose(inputs)
         
-        # Trả về định dạng gốc (Batch, Channels, Length)
-        return tf.transpose(output, perm=[0, 2, 1])
+        # Return in channels_last format: (Batch, Length, Channels)
+        return output
 
     def compute_output_shape(self, input_shape):
-        C_in = input_shape[1]
-        L_in = input_shape[2]
+        # Input shape: (Batch, Length, Channels)
+        L_in = input_shape[1]
+        C_in = input_shape[2]
         L_out = L_in * 2 # Kích thước tăng gấp đôi
         C_out = C_in // 2 # Số kênh giảm một nửa
-        return (input_shape[0], C_out, L_out)
+        return (input_shape[0], L_out, C_out)
