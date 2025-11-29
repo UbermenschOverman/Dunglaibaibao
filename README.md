@@ -1,4 +1,5 @@
-Bên dưới có folder structure, vui lòng tạo các thư mục ngoài src theo đúng cấu trúc và thêm các files data vào data/raw/MITDB và data/raw/NSTDB tương ứng trước khi chạy "python -m src/main.py" từ thư mục cha của src
+Bên dưới có folder structure, vui lòng tạo các thư mục ngoài src theo đúng cấu trúc và thêm các files data vào data/raw/MITDB và data/raw/NSTDB tương ứng trước khi chạy "python -m src/main.py" từ thư mục cha của src  
+Để tiện hơn, khi clone về hãy chạy commands sau: chmod +x create.sh && ./create.sh
 
 # DW-CNN ECG Denoising
 
