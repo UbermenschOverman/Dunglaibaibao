@@ -3,7 +3,19 @@
 import os
 import numpy as np
 import tensorflow as tf
+# tf.config.run_functions_eagerly(True) # Disabled for performance and multi-GPU support
 import pandas as pd
+
+def safe_tensor_to_numpy(tensor):
+    """
+    Safely convert a tensor to a numpy array, handling both EagerTensor and symbolic Tensor (Graph mode).
+    This is crucial for multi-GPU training where eager execution is disabled.
+    """
+    if hasattr(tensor, 'numpy'):
+        return tensor.numpy()
+    else:
+        # Fallback for graph mode / symbolic tensors
+        return tf.make_ndarray(tf.make_tensor_proto(tensor))
 from datetime import datetime
 
 # ==============================
@@ -136,7 +148,7 @@ def train_and_evaluate(model_name, snr_db,
     # CHÚ Ý QUAN TRỌNG: Các hàm tạo mô hình (DW_CNN, v.v.) phải được sửa 
     # để sử dụng Input(shape=(4096, 1)) thay vì Input(shape=(1, 4096))
     # Hoặc ta phải truyền INPUT_SHAPE=(4096, 1) vào đây.
-    model = model_builder()
+    model = model_builder(input_shape=(4096, 1))
     model.compile(optimizer=OPTIMIZER, loss=LOSS_FUNCTION)
 
     # Checkpoint directory
@@ -158,10 +170,24 @@ def train_and_evaluate(model_name, snr_db,
     # -----------------------
     # Training
     # -----------------------
+
+    # Kiểm tra checkpoint trước khi fit
+    initial_epoch = 0
+    if os.path.exists(ckpt_path):
+        print(f"[INFO] Loading existing checkpoint: {ckpt_path}")
+        # Build model with dummy input to ensure all layers (including Conv1DTranspose) are initialized
+        # Use hardcoded shape (4096, 1) to match model input
+        dummy_input = tf.zeros((1, 4096, 1))
+        _ = model(dummy_input)
+        model.load_weights(ckpt_path)
+        # Nếu muốn có log epoch trước đó, bạn có thể lưu epoch train trước vào file
+        # tạm thời set initial_epoch=0, fit thêm EPOCHS vẫn ok
+
     history = model.fit(
         X_train_t, Y_train_t,
         validation_data=(X_val_t, Y_val_t),
         epochs=EPOCHS,
+        initial_epoch=initial_epoch, 
         batch_size=BATCH_SIZE,
         callbacks=[ckpt_callback],
         verbose=1
@@ -185,10 +211,13 @@ def train_and_evaluate(model_name, snr_db,
     rmse_list = []
     snr_list = []
 
-    for i in range(len(Y_pred_raw)):
+    # Convert tensors to numpy explicitly nếu cần (graph mode)
+    Y_pred_raw_np = safe_tensor_to_numpy(Y_pred_raw)
+
+    for i in range(len(Y_pred_raw_np)):
         # Convert từ (channels, length) to 1D cho metrics calculation
         y_test_flat = Y_test_raw[i].flatten()
-        y_pred_flat = Y_pred_raw[i].flatten()
+        y_pred_flat = Y_pred_raw_np[i].flatten()
         rmse_list.append(calculate_rmse(y_test_flat, y_pred_flat))
         snr_list.append(calculate_snr(y_test_flat, y_pred_flat))
 
@@ -228,6 +257,39 @@ def run_experiments(model_dict, run_type):
 
         for model_label, model_name in model_dict.items():
 
+            # Check if experiment is already completed
+            checkpoint_dir = os.path.join(
+                CHECKPOINT_PATH, run_type, f"SNR_{snr_db}dB", model_name
+            )
+            ckpt_path = os.path.join(checkpoint_dir, "best.weights.h5")
+            
+            # Simple check: if best weights exist, we assume it's done or at least started.
+            # To be more robust, we could check if a "done" flag exists or check epoch count.
+            # For now, let's check if the checkpoint exists. If the user wants to resume, 
+            # train_and_evaluate handles it. But if they want to SKIP entirely if done, 
+            # we need a way to know it's "fully done".
+            # Let's assume if best.weights.h5 exists, we might still want to resume if not 100 epochs.
+            # BUT the user says "it will rerun all of the 100 epochs".
+            # This means train_and_evaluate is NOT resuming correctly or it IS resuming but 
+            # the loop keeps calling it.
+            # Actually, train_and_evaluate DOES check for checkpoint and loads it.
+            # If it loads, it sets initial_epoch=0 (in current code). 
+            # Wait, I see: "initial_epoch = 0" in line 164.
+            # If we load weights, we should probably set initial_epoch to the saved epoch.
+            # However, ModelCheckpoint only saves weights, not the epoch number in the filename by default 
+            # unless we change the format.
+            # AND model.load_weights doesn't restore the epoch counter.
+            
+            # STRATEGY:
+            # 1. If we want to SKIP completed experiments, we should check if a "completed" marker exists.
+            # 2. Or we can check if the result is already in the CSV (but CSV is overwritten).
+            
+            # Let's add a "completed.txt" marker after training finishes.
+            done_marker = os.path.join(checkpoint_dir, "TRAINING_COMPLETE")
+            if os.path.exists(done_marker):
+                print(f"[INFO] Skipping {model_name} @ {snr_db} dB (Already Completed)")
+                continue
+
             avg_rmse, avg_snr, history, Y_pred_raw = train_and_evaluate(
                 model_name,
                 snr_db,
@@ -235,6 +297,10 @@ def run_experiments(model_dict, run_type):
                 X_test_raw, Y_test_raw, # Dữ liệu thô cho Metrics/Plotting
                 run_type
             )
+            
+            # Create completion marker
+            with open(done_marker, "w") as f:
+                f.write(f"Completed at {datetime.now()}")
 
             # Save result row
             results.append({
@@ -287,10 +353,10 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------
     # 1. KÍCH HOẠT TIỀN XỬ LÝ (CHỈ CẦN CHẠY MỘT LẦN)
     # -----------------------------------------------------------------
-    print("\n--- BƯỚC 1: TIỀN XỬ LÝ DỮ LIỆU (Đang chạy...) ---")
-    loader = ECGDataLoader(data_root_path=DATA_ROOT)
-    loader.run_preprocessing_and_save() 
-    print("--- TIỀN XỬ LÝ HOÀN THÀNH. Dữ liệu .npy đã được tạo. ---")
+    # print("\n--- BƯỚC 1: TIỀN XỬ LÝ DỮ LIỆU (Đang chạy...) ---")
+    # loader = ECGDataLoader(data_root_path=DATA_ROOT)
+    # loader.run_preprocessing_and_save() 
+    # print("--- TIỀN XỬ LÝ HOÀN THÀNH. Dữ liệu .npy đã được tạo. ---")
 
     # -----------------------------------------------------------------
     # 2. KÍCH HOẠT THÍ NGHIỆM

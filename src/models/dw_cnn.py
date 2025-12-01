@@ -29,12 +29,12 @@ def dw_conv_block(input_tensor, filters, final_filters=None, num_layers=5):
     
     return x
 
-def DW_CNN():
+def DW_CNN(input_shape=(4096, 1)):
     """
     Kiến trúc Deep Wavelet Convolutional Neural Network (DW-CNN).
     Dựa trên cấu trúc Encoder-Decoder và DWT/IDWT (Bảng 2).
     """
-    inputs = Input(shape=INPUT_SHAPE)
+    inputs = Input(shape=input_shape)
 
     # --- ENCODER (Down-sampling) ---
     
