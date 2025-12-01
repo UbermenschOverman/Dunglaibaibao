@@ -69,7 +69,11 @@ ABLATION_MODELS = {
     "DW-CNN (Haar)": "DW_CNN",
     "ModelNet1 (Max Pooling)": "ModelNet1",
     # Có thể thêm các mô hình DW-CNN với wavelet khác ở đây
+    # Có thể thêm các mô hình DW-CNN với wavelet khác ở đây
 }
+
+ALL_MODELS_FOR_EVAL = ["DW_CNN", "ModelNet1", "DNN_DAN", "FCN"]
+NOISE_TYPES = ["BW", "EM", "MA"]
 
 # Thư mục lưu trữ kết quả và checkpoints
 CHECKPOINT_PATH = os.path.join(ROOT_DIR, "checkpoints")
