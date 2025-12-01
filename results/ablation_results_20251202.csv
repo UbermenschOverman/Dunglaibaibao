@@ -1,7 +1,7 @@
 Experiment,Model,Model_Key,SNR(dB),RMSE,SNR,Time
-ablation,DW-CNN (Haar),DW_CNN,0.0,0.35319683,4.9992456,2025-12-02_01:51
-ablation,ModelNet1 (Max Pooling),ModelNet1,0.0,0.6380408,-0.14463146,2025-12-02_01:51
-ablation,DW-CNN (Haar),DW_CNN,1.25,0.24786042,7.879131,2025-12-02_01:51
-ablation,ModelNet1 (Max Pooling),ModelNet1,1.25,0.2591329,7.4606047,2025-12-02_01:51
-ablation,DW-CNN (Haar),DW_CNN,5.0,0.20139663,9.715953,2025-12-02_01:51
-ablation,ModelNet1 (Max Pooling),ModelNet1,5.0,0.21429943,9.080302,2025-12-02_01:51
+ablation,DW-CNN (Haar),DW_CNN,0.0,0.35319683,4.9992456,2025-12-02_02:42
+ablation,ModelNet1 (Max Pooling),ModelNet1,0.0,0.6119639,0.30849096,2025-12-02_02:42
+ablation,DW-CNN (Haar),DW_CNN,1.25,0.24786042,7.879131,2025-12-02_02:42
+ablation,ModelNet1 (Max Pooling),ModelNet1,1.25,0.2591329,7.4606047,2025-12-02_02:42
+ablation,DW-CNN (Haar),DW_CNN,5.0,0.20139663,9.715953,2025-12-02_02:42
+ablation,ModelNet1 (Max Pooling),ModelNet1,5.0,0.21429943,9.080302,2025-12-02_02:42

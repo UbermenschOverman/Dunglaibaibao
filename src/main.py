@@ -3,7 +3,7 @@
 import os
 import numpy as np
 import tensorflow as tf
-# tf.config.run_functions_eagerly(True) # Disabled for performance and multi-GPU support
+# # tf.config.run_functions_eagerly(True) # Disabled for performance and multi-GPU support
 import pandas as pd
 
 def safe_tensor_to_numpy(tensor):
@@ -152,7 +152,11 @@ def train_and_evaluate(model_name, snr_db,
     # để sử dụng Input(shape=(4096, 1)) thay vì Input(shape=(1, 4096))
     # Hoặc ta phải truyền INPUT_SHAPE=(4096, 1) vào đây.
     model = model_builder(input_shape=(4096, 1))
-    model.compile(optimizer=OPTIMIZER, loss=LOSS_FUNCTION)
+    # Instantiate fresh optimizer and loss to avoid state leakage across experiments
+    optimizer = tf.keras.optimizers.Adam()
+    loss_fn = tf.keras.losses.MeanSquaredError()
+    
+    model.compile(optimizer=optimizer, loss=loss_fn)
 
     # Checkpoint directory
     if custom_checkpoint_dir:
@@ -274,6 +278,9 @@ def run_experiments(model_dict, run_type):
         X_train_raw, Y_train_raw, X_val_raw, Y_val_raw, X_test_raw, Y_test_raw = data
 
         for model_label, model_name in model_dict.items():
+            
+            # Clear session to prevent graph state leakage between models
+            tf.keras.backend.clear_session()
 
             # Determine if we should skip training (reuse ablation checkpoint)
             skip_train = False
