@@ -133,12 +133,15 @@ def load_data_for_snr(snr_db):
 def train_and_evaluate(model_name, snr_db,
                        X_train_t, Y_train_t, X_val_t, Y_val_t, X_test_t, Y_test_t, # (B, L, C) for Keras
                        X_test_raw, Y_test_raw, # (B, C, L) for Metrics/Raw data
-                       run_type):
+                       run_type,
+                       skip_train=False,
+                       custom_checkpoint_dir=None):
     """
     Train model, save best checkpoint, evaluate on test set.
+    If skip_train is True, skip training and load weights from custom_checkpoint_dir (or default).
     """
 
-    print(f"\n========== TRAINING {model_name} @ {snr_db} dB ==========")
+    print(f"\n========== PROCESSING {model_name} @ {snr_db} dB ==========")
 
     model_builder = MODEL_MAPPING.get(model_name)
     if model_builder is None:
@@ -152,11 +155,14 @@ def train_and_evaluate(model_name, snr_db,
     model.compile(optimizer=OPTIMIZER, loss=LOSS_FUNCTION)
 
     # Checkpoint directory
-    checkpoint_dir = os.path.join(
-        CHECKPOINT_PATH, run_type, f"SNR_{snr_db}dB", model_name
-    )
+    if custom_checkpoint_dir:
+        checkpoint_dir = custom_checkpoint_dir
+    else:
+        checkpoint_dir = os.path.join(
+            CHECKPOINT_PATH, run_type, f"SNR_{snr_db}dB", model_name
+        )
+    
     os.makedirs(checkpoint_dir, exist_ok=True)
-
     ckpt_path = os.path.join(checkpoint_dir, "best.weights.h5")
 
     ckpt_callback = tf.keras.callbacks.ModelCheckpoint(
@@ -170,32 +176,44 @@ def train_and_evaluate(model_name, snr_db,
     # -----------------------
     # Training
     # -----------------------
+    history = None
+    
+    if not skip_train:
+        print(f"[INFO] Training {model_name}...")
+        # Kiểm tra checkpoint trước khi fit
+        initial_epoch = 0
+        if os.path.exists(ckpt_path):
+            print(f"[INFO] Loading existing checkpoint: {ckpt_path}")
+            # Build model with dummy input to ensure all layers (including Conv1DTranspose) are initialized
+            # Use hardcoded shape (4096, 1) to match model input
+            dummy_input = tf.zeros((1, 4096, 1))
+            _ = model(dummy_input)
+            model.load_weights(ckpt_path)
+            # Nếu muốn có log epoch trước đó, bạn có thể lưu epoch train trước vào file
+            # tạm thời set initial_epoch=0, fit thêm EPOCHS vẫn ok
 
-    # Kiểm tra checkpoint trước khi fit
-    initial_epoch = 0
-    if os.path.exists(ckpt_path):
-        print(f"[INFO] Loading existing checkpoint: {ckpt_path}")
-        # Build model with dummy input to ensure all layers (including Conv1DTranspose) are initialized
-        # Use hardcoded shape (4096, 1) to match model input
-        dummy_input = tf.zeros((1, 4096, 1))
-        _ = model(dummy_input)
-        model.load_weights(ckpt_path)
-        # Nếu muốn có log epoch trước đó, bạn có thể lưu epoch train trước vào file
-        # tạm thời set initial_epoch=0, fit thêm EPOCHS vẫn ok
+        history = model.fit(
+            X_train_t, Y_train_t,
+            validation_data=(X_val_t, Y_val_t),
+            epochs=EPOCHS,
+            initial_epoch=initial_epoch, 
+            batch_size=BATCH_SIZE,
+            callbacks=[ckpt_callback],
+            verbose=1
+        )
+    else:
+        print(f"[INFO] Skipping training for {model_name} (Using existing checkpoint).")
+        if not os.path.exists(ckpt_path):
+             # Fallback: if user wanted to skip but file missing, maybe warn or error?
+             # For now, let's raise error because we expect it to exist.
+             raise FileNotFoundError(f"Expected checkpoint not found at {ckpt_path} for skipped training.")
 
-    history = model.fit(
-        X_train_t, Y_train_t,
-        validation_data=(X_val_t, Y_val_t),
-        epochs=EPOCHS,
-        initial_epoch=initial_epoch, 
-        batch_size=BATCH_SIZE,
-        callbacks=[ckpt_callback],
-        verbose=1
-    )
-
-    # Load best weights
+    # Load best weights (whether trained or skipped)
     print(f"[INFO] Loading best weights: {ckpt_path}")
     try:
+        # Ensure model is built
+        dummy_input = tf.zeros((1, 4096, 1))
+        _ = model(dummy_input)
         model.load_weights(ckpt_path)
     except Exception as e:
         print(f"[WARNING] Could not load best weights: {e}")
@@ -257,76 +275,83 @@ def run_experiments(model_dict, run_type):
 
         for model_label, model_name in model_dict.items():
 
-            # Check if experiment is already completed
-            checkpoint_dir = os.path.join(
-                CHECKPOINT_PATH, run_type, f"SNR_{snr_db}dB", model_name
-            )
-            ckpt_path = os.path.join(checkpoint_dir, "best.weights.h5")
+            # Determine if we should skip training (reuse ablation checkpoint)
+            skip_train = False
+            custom_ckpt_dir = None
             
-            # Simple check: if best weights exist, we assume it's done or at least started.
-            # To be more robust, we could check if a "done" flag exists or check epoch count.
-            # For now, let's check if the checkpoint exists. If the user wants to resume, 
-            # train_and_evaluate handles it. But if they want to SKIP entirely if done, 
-            # we need a way to know it's "fully done".
-            # Let's assume if best.weights.h5 exists, we might still want to resume if not 100 epochs.
-            # BUT the user says "it will rerun all of the 100 epochs".
-            # This means train_and_evaluate is NOT resuming correctly or it IS resuming but 
-            # the loop keeps calling it.
-            # Actually, train_and_evaluate DOES check for checkpoint and loads it.
-            # If it loads, it sets initial_epoch=0 (in current code). 
-            # Wait, I see: "initial_epoch = 0" in line 164.
-            # If we load weights, we should probably set initial_epoch to the saved epoch.
-            # However, ModelCheckpoint only saves weights, not the epoch number in the filename by default 
-            # unless we change the format.
-            # AND model.load_weights doesn't restore the epoch counter.
-            
-            # STRATEGY:
-            # 1. If we want to SKIP completed experiments, we should check if a "completed" marker exists.
-            # 2. Or we can check if the result is already in the CSV (but CSV is overwritten).
-            
-            # Let's add a "completed.txt" marker after training finishes.
-            done_marker = os.path.join(checkpoint_dir, "TRAINING_COMPLETE")
-            if os.path.exists(done_marker):
-                print(f"[INFO] Skipping {model_name} @ {snr_db} dB (Already Completed)")
-                continue
-
-            avg_rmse, avg_snr, history, Y_pred_raw = train_and_evaluate(
-                model_name,
-                snr_db,
-                X_train_t, Y_train_t, X_val_t, Y_val_t, X_test_t, Y_test_t,
-                X_test_raw, Y_test_raw, # Dữ liệu thô cho Metrics/Plotting
-                run_type
-            )
-            
-            # Create completion marker
-            with open(done_marker, "w") as f:
-                f.write(f"Completed at {datetime.now()}")
-
-            # Save result row
-            results.append({
-                "Experiment": run_type,
-                "Model": model_label,
-                "Model_Key": model_name,
-                "SNR(dB)": snr_db,
-                "RMSE": avg_rmse,
-                "SNR": avg_snr,
-                "Time": datetime.now().strftime("%Y-%m-%d_%H:%M")
-            })
-
-            # Visualization (optional — default: only DW-CNN)
             if run_type == "comparative" and model_name == "DW_CNN":
-                out_dir = os.path.join(RESULTS_PATH, run_type, f"SNR_{snr_db}dB")
-                os.makedirs(out_dir, exist_ok=True)
-
-                # Dữ liệu X_test_raw, Y_test_raw và Y_pred_raw đều là (B, C, L)
-                plot_ecg_comparison(
-                    x_noisy=X_test_raw[0],
-                    x_clean=Y_test_raw[0],
-                    x_denoised_list=[("DW-CNN", Y_pred_raw[0])],
-                    noise_type="Combined",
-                    snr_db=snr_db,
-                    output_path=out_dir
+                # Reuse checkpoint from ablation experiment
+                skip_train = True
+                custom_ckpt_dir = os.path.join(
+                    CHECKPOINT_PATH, "ablation", f"SNR_{snr_db}dB", "DW_CNN"
                 )
+                print(f"[INFO] Configured to reuse Ablation checkpoint for {model_name}")
+
+            # Standard Checkpoint Directory (if not custom)
+            if custom_ckpt_dir:
+                checkpoint_dir = custom_ckpt_dir
+            else:
+                checkpoint_dir = os.path.join(
+                    CHECKPOINT_PATH, run_type, f"SNR_{snr_db}dB", model_name
+                )
+            
+            # Check if experiment is already completed (only if NOT skipping training logic above)
+            # If we are reusing ablation checkpoint, we still want to run evaluation to get metrics for the comparative table.
+            # But if it's a standard run, we check for TRAINING_COMPLETE.
+            
+            done_marker = os.path.join(checkpoint_dir, "TRAINING_COMPLETE")
+            
+            # If it's a standard run and marked done, skip training but run evaluation
+            if not skip_train and os.path.exists(done_marker):
+                print(f"[INFO] Experiment {model_name} @ {snr_db} dB is marked complete. Skipping training and running evaluation.")
+                skip_train = True
+
+            import traceback
+            try:
+                avg_rmse, avg_snr, history, Y_pred_raw = train_and_evaluate(
+                    model_name,
+                    snr_db,
+                    X_train_t, Y_train_t, X_val_t, Y_val_t, X_test_t, Y_test_t,
+                    X_test_raw, Y_test_raw, # Dữ liệu thô cho Metrics/Plotting
+                    run_type,
+                    skip_train=skip_train,
+                    custom_checkpoint_dir=custom_ckpt_dir
+                )
+                
+                # Create completion marker only if we actually trained
+                if not skip_train:
+                    with open(done_marker, "w") as f:
+                        f.write(f"Completed at {datetime.now()}")
+
+                # Save result row
+                results.append({
+                    "Experiment": run_type,
+                    "Model": model_label,
+                    "Model_Key": model_name,
+                    "SNR(dB)": snr_db,
+                    "RMSE": avg_rmse,
+                    "SNR": avg_snr,
+                    "Time": datetime.now().strftime("%Y-%m-%d_%H:%M")
+                })
+
+                # Visualization (optional — default: only DW-CNN)
+                if run_type == "comparative" and model_name == "DW_CNN":
+                    out_dir = os.path.join(RESULTS_PATH, run_type, f"SNR_{snr_db}dB")
+                    os.makedirs(out_dir, exist_ok=True)
+
+                    # Dữ liệu X_test_raw, Y_test_raw và Y_pred_raw đều là (B, C, L)
+                    plot_ecg_comparison(
+                        x_noisy=X_test_raw[0],
+                        x_clean=Y_test_raw[0],
+                        x_denoised_list=[("DW-CNN", Y_pred_raw[0])],
+                        noise_type="Combined",
+                        snr_db=snr_db,
+                        output_path=out_dir
+                    )
+            except Exception as e:
+                print(f"[ERROR] Failed to process {model_name} @ {snr_db} dB: {e}")
+                traceback.print_exc()
+
 
     # Save results table
     results_df = pd.DataFrame(results)
