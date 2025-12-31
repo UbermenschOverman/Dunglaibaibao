@@ -5,7 +5,7 @@ import numpy as np
 import os
 from .metrics import calculate_rmse, calculate_snr
 
-def plot_ecg_comparison(x_noisy, x_clean, x_denoised_list, noise_type, snr_db, output_path):
+def plot_ecg_comparison(x_noisy, x_clean, x_denoised_list, noise_type, snr_db, output_path, filename_suffix=""):
     """
     Vẽ biểu đồ so sánh tín hiệu ECG nhiễu, sạch, và đã khử nhiễu (từ các mô hình).
 
@@ -21,7 +21,8 @@ def plot_ecg_comparison(x_noisy, x_clean, x_denoised_list, noise_type, snr_db, o
     :param x_denoised_list: Danh sách các cặp (tên mô hình, mẫu đã khử nhiễu)
     :param noise_type: Loại nhiễu (BW, EM, MA)
     :param snr_db: Mức SNR (dB)
-    :param output_path: Đường dẫn để lưu hình ảnh
+    :param output_path: Đường dẫn để lưu hình ảnh (thư mục)
+    :param filename_suffix: Hậu tố tên file (tùy chọn)
     """
     # Chuyển đổi về 1D nếu cần (loại bỏ channel dimension 1xN)
     x_noisy = x_noisy.flatten()
@@ -70,7 +71,7 @@ def plot_ecg_comparison(x_noisy, x_clean, x_denoised_list, noise_type, snr_db, o
     plt.tight_layout()
     
     # Tạo tên file và lưu
-    filename = f"comparison_{noise_type}_{snr_db}dB.png"
+    filename = f"comparison_{noise_type}_{snr_db}dB{filename_suffix}.png"
     filepath = os.path.join(output_path, filename)
     os.makedirs(output_path, exist_ok=True)
     plt.savefig(filepath)
